@@ -4,7 +4,7 @@
 #include "extern_lib/declaration.p4"
 
 #define COLLECTION_TIMEDELTA 55000
-
+#define THRESHOLD 100 
 /*************************************************************************
 *********************** H E A D E R S  ***********************************
 *************************************************************************/
@@ -77,8 +77,8 @@ header modbus_tcp_t {
     bit<16> protocolId;
     bit<16> length;
     bit<8> unitId;
+    bit<8> functionCode;
 }
-
 header payload_t {
    varbit<2048> content;
 }
@@ -231,7 +231,8 @@ control MyIngress(inout headers hdr,
                   inout standard_metadata_t standard_metadata) {
 
    register<bit<32>>(8) keys;
-
+   register<bit<32>>(1) fc1_counter;
+   register<bit<32>>(1) threshold_reg; // idk bout this 
     action drop() {
         mark_to_drop(standard_metadata);
     }
@@ -322,15 +323,35 @@ control MyIngress(inout headers hdr,
     }
 
     apply {
-        if (hdr.ipv4.isValid()){
-            ipv4_lpm.apply();
-            if (hdr.tcp.isValid()){
-                if (hdr.modbus_tcp.isValid()){
-                    modbus_sec.apply();
+    if (hdr.ipv4.isValid()){
+        ipv4_lpm.apply();
+
+        if (hdr.tcp.isValid()){
+
+            if (hdr.modbus_tcp.isValid()){
+
+                bit<32> cnt;
+                bit<32> threshold;
+
+                threshold_reg.read(threshold, 0);
+
+                fc1_counter.read(cnt, 0);
+
+                if (hdr.modbus_tcp.functionCode == 1) {
+
+                    cnt = cnt + 1;
+                    fc1_counter.write(0, cnt);
+                
                 }
+                if (cnt > threshold) {
+                    mark_to_drop(standard_metadata);
+                }
+
+                // modbus_sec.apply();
             }
         }
     }
+}
 }
 
 /*************************************************************************

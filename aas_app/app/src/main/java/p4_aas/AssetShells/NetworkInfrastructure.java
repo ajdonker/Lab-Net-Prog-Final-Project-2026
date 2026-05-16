@@ -17,7 +17,7 @@ package p4_aas.AssetShells;
 import org.eclipse.basyx.aas.metamodel.api.parts.asset.AssetKind;
 
 import p4_aas.Submodels.NetworkInfrastructure.NetworkInfrastructureSubmodel;
-
+import p4_aas.Submodels.NetworkInfrastructure.FC1ControlSubmodel;
 /**
  * Extends AbstractShell to create Network Infrastructure AAS
  * This AAS represents the Infrastructure level in a Network Configuration.
@@ -32,5 +32,6 @@ public class NetworkInfrastructure extends AbstractShell {
 
     private void createSubmodels() {
         this.submodels.addAll(new NetworkInfrastructureSubmodel().createSubmodel());
+        this.submodels.addAll(new FC1ControlSubmodel().createSubmodel());
     }
 }
