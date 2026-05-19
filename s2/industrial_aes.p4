@@ -11,7 +11,7 @@
 const bit<16> TYPE_IPV4 = 0x800;
 const bit<16> IPV4_LEN = 16w20;
 const bit<32> FLOW_REG_SIZE_32 = 32w65536;
-const bit<32> FUNCTION_CODE_1_THRESHOLD = 32w100;
+const bit<32> FUNCTION_CODE_1_THRESHOLD = 32w10;
 
 typedef bit<9>  egressSpec_t;
 typedef bit<48> macAddr_t;
@@ -82,9 +82,6 @@ header modbus_tcp_t {
     bit<8> functionCode;
 }
 
-header modbus_function_t {
-    bit<8> functionCode; 
-}
 header payload_t {
    varbit<2048> content;
 }
@@ -125,7 +122,6 @@ struct headers {
     tcp_t tcp;
     tcp_options_t tcp_options;
     modbus_tcp_t modbus_tcp;
-    modbus_function_t modbus_function;
     payload_t payload;
     payload_encrypt_t payload_encrypt;
     payload_decrypt_t payload_decrypt;
@@ -203,37 +199,31 @@ parser MyParser(packet_in packet,
     state check_dst_port_tcp {
         transition select(hdr.tcp.dstPort) {
             502 : extract_modbus_tcp;
-            default : check_src_port_tcp;
-        }
-    }
-
-    state check_src_port_tcp {
-        transition select(hdr.tcp.srcPort) {
-            502 : extract_modbus_tcp;
             default : accept;
         }
     }
 
-    state extract_modbus_tcp {
-        packet.extract(hdr.tcp_options);
-        packet.extract(hdr.modbus_tcp);
-        transition select(hdr.modbus_tcp.length) {
-           0: accept;
-           1: accept;
-           _: parse_modbus_function; 
-        }
-    }
-    state parse_modbus_function {
-        packet.extract(hdr.modbus_function);
-        meta.hasModbusFunctionCode = 1;
-        meta.modbusFunctionCode = hdr.modbus_function.functionCode;
-        transition select(hdr.modbus_tcp.length) {
-            2: accept;
-            _: parse_payload_modbus;
-        }
-    }
+    // state check_src_port_tcp {
+    //     transition select(hdr.tcp.srcPort) {
+    //         502 : extract_modbus_tcp;
+    //         default : accept;
+    //     }
+    // }
+ state extract_modbus_tcp {
+    packet.extract(hdr.tcp_options);
+    packet.extract(hdr.modbus_tcp);
 
-    state parse_payload_modbus {
+    meta.hasModbusFunctionCode = 1;
+    meta.modbusFunctionCode = hdr.modbus_tcp.functionCode;
+
+    transition select(hdr.modbus_tcp.length) {
+       0: accept;
+       1: accept;
+       2: accept;
+       _: parse_payload_modbus;
+    }
+}
+   state parse_payload_modbus {
         //bit<32> calculated_length = (bit<32>)((hdr.ipv4.totalLen - (((bit<16>)hdr.ipv4.ihl) * 4) - (((bit<16>)hdr.tcp.dataOffset) * 4) - 7) * 8);
         bit<32> calculated_length = ((bit<32>)(hdr.modbus_tcp.length - 2)) * 8;
         packet.extract(hdr.payload, (bit<32>)(calculated_length));
@@ -258,8 +248,9 @@ control MyIngress(inout headers hdr,
                   inout standard_metadata_t standard_metadata) {
 
    register<bit<32>>(8) keys;
-   register<bit<32>>(FLOW_REG_SIZE) function_code_1_counter;
-   register<bit<1>>(FLOW_REG_SIZE) blocked_flows;
+   register<bit<32>>(1) function_code_1_counter;
+   register<bit<32>>(1) threshold_reg;
+   register<bit<1>>(1) blocked;
 
     action drop() {
         meta.stopFlow = 1;
@@ -287,34 +278,39 @@ control MyIngress(inout headers hdr,
     }
 
     action check_function_code_1_threshold() {
+        bit<32> threshold;
         bit<32> current_count;
         bit<1> is_blocked;
-        hash(
-            meta.flowIndex, 
-            HashAlgorithm.crc32,
-            32w0,
-            {
-                hdr.ipv4.srcAddr,
-                hdr.ipv4.dstAddr,
-                hdr.tcp.srcPort,
-                hdr.tcp.dstPort,
-                hdr.ipv4.protocol
-            },
-            FLOW_REG_SIZE_32
-        );
-        blocked_flows.read(is_blocked, meta.flowIndex);
+        // hash(
+        //     meta.flowIndex, 
+        //     HashAlgorithm.crc32,
+        //     32w0,
+        //     {
+        //         hdr.ipv4.srcAddr,
+        //         hdr.ipv4.dstAddr,
+        //         hdr.tcp.srcPort,
+        //         hdr.tcp.dstPort,
+        //         hdr.ipv4.protocol
+        //     },
+        //     FLOW_REG_SIZE_32
+        // );
+        blocked.read(is_blocked, 0);
+        threshold_reg.read(threshold, 0);
+        if(threshold == 0){
+            threshold = FUNCTION_CODE_1_THRESHOLD; 
+        }
         if(is_blocked == 1){
             drop();
         } else {
-            if(meta.hasModbusFunctionCode == 1 && meta.modbusFunctionCode == 1){
-                function_code_1_counter.read(current_count, meta.flowIndex);
+            if(meta.hasModbusFunctionCode == 1w1 && meta.modbusFunctionCode == 8w1){
+                function_code_1_counter.read(current_count, 0);
 
                 current_count = current_count + 1;
 
-                function_code_1_counter.write(meta.flowIndex, current_count);
+                function_code_1_counter.write(0, current_count);
 
-                if(current_count >= FUNCTION_CODE_1_THRESHOLD) {
-                    blocked_flows.write(meta.flowIndex, 1);
+                if(current_count > threshold) {
+                    blocked.write(0, 1w1);
                     drop();
                 }
             }
@@ -480,7 +476,6 @@ control MyDeparser(packet_out packet, in headers hdr) {
         packet.emit(hdr.tcp);
         packet.emit(hdr.tcp_options);
         packet.emit(hdr.modbus_tcp);
-        packet.emit(hdr.modbus_function);
         packet.emit(hdr.payload_encrypt);
         packet.emit(hdr.payload_decrypt);
         packet.emit(hdr.payload);
